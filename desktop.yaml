@@ -1,0 +1,51 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  # This name uniquely identifies the Deployment
+  name: desktop-deployment
+spec:
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        # Label is used as selector in the service.
+        app: desktop
+    spec:
+      # Refer to the PVC created earlier
+      volumes:
+      - name: storage
+        hostPath:
+          path: /opt/projects      
+      - name: docker
+        hostPath:
+          path: /var/run/docker.sock      
+      containers:
+      - name: desktop
+        # Pulls the default Minio image from Docker Hub
+        image: helvi/desktop
+        ports:
+        - containerPort: 80
+          hostPort: 80
+        # Mount the volume into the pod
+        volumeMounts:
+        - name: storage # must match the volume name, above
+          mountPath: "/root/projects"
+        - name: docker # must match the volume name, above
+          mountPath: "/var/run/docker.sock"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: desktop-service
+  labels:
+    app: desktop-service  
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      nodePort: 31333
+  selector:
+    app: desktop
