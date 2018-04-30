@@ -1,49 +1,88 @@
-FROM ubuntu:16.04
-MAINTAINER Oscar Larrayoz <oscar.larrayoz@helvetia.es>
-
-ENV DEBIAN_FRONTEND noninteractive
-
-ADD https://go.microsoft.com/fwlink/?LinkID=760868 /code_amd64.deb
+################################################################################
+# base system
+################################################################################
+FROM ubuntu:16.04 as system
 
 # built-in packages
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends software-properties-common curl \
-    && sh -c "echo 'deb http://download.opensuse.org/repositories/home:/Horst3180/xUbuntu_16.04/ /' >> /etc/apt/sources.list.d/arc-theme.list" \
-    && curl -SL http://download.opensuse.org/repositories/home:Horst3180/xUbuntu_16.04/Release.key | apt-key add - \
-    && add-apt-repository ppa:fcwu-tw/ppa \
+    && apt-get install -y --no-install-recommends software-properties-common curl apache2-utils \
+    && add-apt-repository ppa:fcwu-tw/apps \
     && apt-get update \
     && apt-get install -y --no-install-recommends --allow-unauthenticated \
-        supervisor \
-        openssh-server pwgen sudo vim-tiny \
-        net-tools \
-        git \
-        lxde x11vnc xvfb \
-        gtk2-engines-murrine ttf-ubuntu-font-family \
-        libreoffice firefox \
-        fonts-wqy-microhei \
-        language-pack-zh-hant language-pack-gnome-zh-hant firefox-locale-zh-hant libreoffice-l10n-zh-tw \
-        nginx \
-        python-pip python-dev python3-pip python3-dev build-essential \
+        supervisor nginx sudo vim-tiny net-tools zenity xz-utils \
+        dbus-x11 x11-utils alsa-utils \
         mesa-utils libgl1-mesa-dri \
-        gnome-themes-standard gtk2-engines-pixbuf gtk2-engines-murrine pinta arc-theme \
-        dbus-x11 x11-utils \
-        libnotify4 libgconf-2-4 gconf2 gconf-service gvfs-bin xdg-utils \
-        docker.io \
-        ./code_amd64.deb \
+        lxde x11vnc xvfb \
+        gtk2-engines-murrine gnome-themes-standard gtk2-engines-pixbuf gtk2-engines-murrine arc-theme \
+        firefox chromium-browser \
+        ttf-ubuntu-font-family ttf-wqy-zenhei \
+        openjdk-8-jdk \
+    && add-apt-repository -r ppa:fcwu-tw/apps \
     && apt-get autoclean \
     && apt-get autoremove \
     && rm -rf /var/lib/apt/lists/*
-    
-# tini for subreap                                   
-ENV TINI_VERSION v0.9.0
+
+# tini for subreap
+ARG TINI_VERSION=v0.9.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /bin/tini
 RUN chmod +x /bin/tini
 
-ADD image /
-RUN pip install setuptools wheel && pip install -r /usr/lib/web/requirements.txt
+# ffmpeg
+RUN mkdir -p /usr/local/ffmpeg \
+    && curl -sSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-64bit-static.tar.xz | tar xJvf - -C /usr/local/ffmpeg/ --strip 1
+
+# python library
+COPY image/usr/local/lib/web/backend/requirements.txt /tmp/
+RUN apt-get update \
+    && dpkg-query -W -f='${Package}\n' > /tmp/a.txt \
+    && apt-get install -y python-pip python-dev build-essential \
+	&& pip install setuptools wheel && pip install -r /tmp/requirements.txt \
+    && dpkg-query -W -f='${Package}\n' > /tmp/b.txt \
+    && apt-get remove -y `diff --changed-group-format='%>' --unchanged-group-format='' /tmp/a.txt /tmp/b.txt | xargs` \
+    && apt-get autoclean -y \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/cache/apt/* /tmp/a.txt /tmp/b.txt
+
+
+################################################################################
+# builder
+################################################################################
+FROM ubuntu:16.04 as builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates
+
+# nodejs
+RUN curl -sL https://deb.nodesource.com/setup_9.x | bash - \
+    && apt-get install -y nodejs
+
+# yarn
+RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
+    && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list \
+    && apt-get update \
+    && apt-get install -y yarn
+
+# build frontend
+COPY web /src/web
+RUN cd /src/web \
+    && yarn \
+    && npm run build
+
+
+################################################################################
+# merge
+################################################################################
+FROM system
+LABEL maintainer="oscar.larrayoz@helvetia.es"
+
+COPY --from=builder /src/web/dist/ /usr/local/lib/web/frontend/
+COPY image /
+COPY ssl /etc/nginx/ssl/
 
 EXPOSE 80
 WORKDIR /root
 ENV HOME=/home/ubuntu \
     SHELL=/bin/bash
+HEALTHCHECK --interval=30s --timeout=5s CMD curl --fail http://127.0.0.1/api/health
 ENTRYPOINT ["/startup.sh"]

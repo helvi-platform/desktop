@@ -1,0 +1,74 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: desktop-pv-claim
+  namespace: arcus
+  annotations:
+    volume.beta.kubernetes.io/storage-class: "desktop"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 40Gi
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  # This name uniquely identifies the Deployment
+  name: desktop-deployment
+  namespace: arcus
+spec:
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        # Label is used as selector in the service.
+        app: desktop
+    spec:
+      # Refer to the PVC created earlier
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: desktop-pv-claim        
+      - name: docker
+        hostPath:
+          path: /var/run/docker.sock      
+      containers:
+      - name: desktop
+        # Pulls the default desktop image from Docker Hub
+        image: helvi/desktop
+        env:
+        - name: HTTP_PASSWORD
+          value: mypassword
+        - name: USER
+          value: dev
+        - name: PASSWORD
+          value: mypassword
+        ports:
+        - containerPort: 80
+          hostPort: 80
+        # Mount the volume into the pod
+        volumeMounts:
+        - name: storage # must match the volume name, above
+          mountPath: "/root/projects"
+        - name: docker # must match the volume name, above
+          mountPath: "/var/run/docker.sock"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: desktop-service
+  namespace: arcus
+  labels:
+    app: desktop-service  
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      nodePort: 31444
+  selector:
+    app: desktop
